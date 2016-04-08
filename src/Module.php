@@ -6,6 +6,6 @@ class Module implements \Transphporm\Module {
 		$functionSet = $config->getFunctionSet();
 		$baseDir = &$config->getBaseDir();
 
-        $functionSet->addFunction('markdown', new Function($baseDir));
+        $functionSet->addFunction('markdown', new MarkDownFunction($baseDir));
     }
 }

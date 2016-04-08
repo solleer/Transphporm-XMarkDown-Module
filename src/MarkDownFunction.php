@@ -1,7 +1,7 @@
 <?php
 
 namespace TransphpormXMarkDown;
-class Function implements \Transphporm\TSSFunction {
+class MarkDownFunction implements \Transphporm\TSSFunction {
     private $baseDir;
 
     public function __construct(&$baseDir) {
@@ -38,6 +38,8 @@ class Function implements \Transphporm\TSSFunction {
     private function getMarkDown($markdown) {
         if (is_file($this->baseDir . $markdown)) {
             return file_get_contents($this->baseDir . $markdown);
+        } else if (is_file($markdown)) {
+            return file_get_contents($markdown);
         }
         else return $markdown;
     }
