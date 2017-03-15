@@ -1,0 +1,10 @@
+{
+    "name": "solleer/transphporm-xmarkdown-module",
+    "homepage": "https://github.com/solleer/Transphporm-XMarkDown-Module",
+    "require": {
+        "level-2/transphporm": ">=1.1.1"
+    },
+    "autoload": {
+    	"classmap": ["src/"]
+    }
+}
