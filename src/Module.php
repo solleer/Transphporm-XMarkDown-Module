@@ -4,8 +4,8 @@ namespace TransphpormXMarkDown;
 class Module implements \Transphporm\Module {
     public function load(\Transphporm\Config $config) {
 		$functionSet = $config->getFunctionSet();
-		$baseDir = &$config->getBaseDir();
+		$filePath = $config->getFilePath();
 
-        $functionSet->addFunction('markdown', new MarkDownFunction($baseDir));
+        $functionSet->addFunction('markdown', new MarkDownFunction($filePath));
     }
 }

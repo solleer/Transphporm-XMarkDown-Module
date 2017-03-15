@@ -6,26 +6,24 @@
  * @version         1.0                                                             */
 namespace Transphporm\Parser;
 class CssToXpath {
-	private $specialChars = [' ', '.', '>', '~', '#', ':', '[', ']'];
+	private $specialChars = [Tokenizer::WHITESPACE, Tokenizer::DOT, Tokenizer::GREATER_THAN,
+		'~', Tokenizer::NUM_SIGN, Tokenizer::COLON, Tokenizer::OPEN_SQUARE_BRACKET];
 	private $translators = [];
-	private $css;
-	private $depth;
-	private $valueParser;
 	private static $instances = [];
+	private $functionSet;
 
 
-	public function __construct($css, Value $valueParser, $prefix = '') {
+	public function __construct(\Transphporm\FunctionSet $functionSet, $prefix = '') {
 		$hash = $this->registerInstance();
-		$this->valueParser = $valueParser;
-		$this->css = str_replace([' >', '> '],['>', '>'], trim($css));
+		$this->functionSet = $functionSet;
+
 		$this->translators = [
-			' ' => function($string) use ($prefix) { return '//' . $prefix . $string;	},
+			Tokenizer::WHITESPACE => function($string) use ($prefix) { return '//' . $prefix . $string;	},
 			'' => function($string) use ($prefix) { return '/' . $prefix . $string;	},
-			'>' => function($string) use ($prefix) { return '/' . $prefix  . $string; },
-			'#' => function($string) { return '[@id=\'' . $string . '\']'; },
-			'.' => function($string) { return '[contains(concat(\' \', normalize-space(@class), \' \'), \' ' . $string . ' \')]'; }, 
-			'[' => function($string) use ($hash) { return '[' .'php:function(\'\Transphporm\Parser\CssToXpath::processAttr\', \'' . $string . '\', ., "' . $hash . '")' . ']';	},
-			']' => function() {	return ''; }
+			Tokenizer::GREATER_THAN => function($string) use ($prefix) { return '/' . $prefix  . $string; },
+			Tokenizer::NUM_SIGN => function($string) { return '[@id=\'' . $string . '\']'; },
+			Tokenizer::DOT => function($string) { return '[contains(concat(\' \', normalize-space(@class), \' \'), \' ' . $string . ' \')]'; },
+			Tokenizer::OPEN_SQUARE_BRACKET => function($string) use ($hash) { return '[' .'php:function(\'\Transphporm\Parser\CssToXpath::processAttr\', \'' . base64_encode(serialize($string)) . '\', ., "' . $hash . '")' . ']';	}
 		];
 	}
 
@@ -44,24 +42,19 @@ class CssToXpath {
 
 	//XPath only allows registering of static functions... this is a hacky workaround for that
 	public static function processAttr($attr, $element, $hash) {
-		$comparators = ['!=', '='];
-		$valueParser = self::$instances[$hash]->valueParser;
-		foreach ($comparators as $comparator) {
-			if (strpos($attr, $comparator) !== false) {
-				$parts = explode($comparator, $attr);
-				$parts = array_map(function($val) use ($valueParser, $element) {
-					return $valueParser->parse($val, $element[0])[0];
-				}, $parts);
-				
-				return self::compare($comparator, $element[0]->getAttribute($parts[0]), $parts[1]);
-			}
-		}
-		return $attr;
-	}
+		$attr = unserialize(base64_decode($attr));
+		$functionSet = self::$instances[$hash]->functionSet;
+		$functionSet->setElement($element[0]);
 
-	private static function compare($comparator, $a, $b) {
-		if ($comparator == '=') return $a == $b;
-		else if ($comparator == '!=') return $a != $b;
+		$attributes = array();
+        foreach($element[0]->attributes as $attribute_name => $attribute_node) {
+            $attributes[$attribute_name] = $attribute_node->nodeValue;
+        }
+
+        $parser = new \Transphporm\Parser\Value($functionSet, true);
+		$return = $parser->parseTokens($attr, $attributes);
+
+		return $return[0] === '' ? false : $return[0];
 	}
 
 	//split the css into indivudal functions
@@ -70,21 +63,20 @@ class CssToXpath {
 		$selector = $this->createSelector();
 		$selectors[] = $selector;
 
-		for ($i = 0; $i < strlen($css); $i++) {
-			if (in_array($css[$i], $this->specialChars)) {
+		foreach ($css as $token) {
+			if (in_array($token['type'], $this->specialChars)) {
 				$selector = $this->createSelector();
-				$selector->type = $css[$i];
+				$selector->type = $token['type'];
 				$selectors[] = $selector;
 			}
-			else $selector->string .= $css[$i];			
+			if (isset($token['value'])) $selectors[count($selectors)-1]->string = $token['value'];
 		}
 		return $selectors;
 	}
 
-	public function getXpath() {
-		$css = explode(':', $this->css)[0];
+	public function getXpath($css) {		
+		$css = $this->removeSpacesFromDirectDecend($css)->splitOnToken(Tokenizer::COLON)[0];
 		$selectors = $this->split($css);
-		$this->depth = count($selectors);
 		$xpath = '/';
 		foreach ($selectors as $selector) {
 			if (isset($this->translators[$selector->type])) $xpath .= $this->translators[$selector->type]($selector->string, $xpath);
@@ -95,12 +87,22 @@ class CssToXpath {
 		return $xpath;
 	}
 
-	public function getDepth() {
-		return $this->depth;
+	private function removeSpacesFromDirectDecend($css) {
+		$tokens = [];
+		foreach ($css->splitOnToken(Tokenizer::GREATER_THAN) as $token) {
+			foreach ($token->trim() as $t) $tokens[]  = $t;
+			$tokens[] = ['type' => Tokenizer::GREATER_THAN];
+		}
+		return new Tokens(array_slice($tokens, 0, -1));
 	}
-	
-	public function getPseudo() {
-		$parts = explode(':', $this->css);
+
+
+	public function getDepth($css) {
+		return count($this->split($css));
+	}
+
+	public function getPseudo($css) {
+		$parts = $css->splitOnToken(Tokenizer::COLON);
 		array_shift($parts);
 		return $parts;
 	}

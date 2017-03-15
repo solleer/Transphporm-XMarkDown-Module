@@ -9,7 +9,7 @@ namespace Transphporm;
 class Builder {
 	private $template;
 	private $tss;
-	private $baseDir;
+	private $rootDir;
 	private $cache;
 	private $time;
 	private $modules = [];
@@ -39,35 +39,38 @@ class Builder {
 		$this->modules[get_class($module)] = $module;
 	}
 
+	public function setRootDir($rootDir) {
+		$this->rootDir = $rootDir;
+	}
+
 	public function output($data = null, $document = false) {
 		$headers = [];
-		
-		$elementData = new \Transphporm\Hook\ElementData(new \SplObjectStorage(), $data);
-		
-		$data = new FunctionSet($elementData, $this->baseDir);
-		$config = new Config($data, $elementData, new Hook\Formatter(), $headers, $this->baseDir);
 
-		foreach ($this->modules as $module) $module->load($config);
-		
+		$elementData = new \Transphporm\Hook\ElementData(new \SplObjectStorage(), $data);
+		$functionSet = new FunctionSet($elementData);
+
 		$cachedOutput = $this->loadTemplate();
 		//To be a valid XML document it must have a root element, automatically wrap it in <template> to ensure it does
 		$template = new Template($this->isValidDoc($cachedOutput['body']) ? str_ireplace('<!doctype', '<!DOCTYPE', $cachedOutput['body']) : '<template>' . $cachedOutput['body'] . '</template>' );
+		$valueParser = new Parser\Value($functionSet);
+		$config = new Config($functionSet, $valueParser, $elementData, new Hook\Formatter(), new Parser\CssToXpath($functionSet, $template->getPrefix()), new FilePath($this->rootDir), $headers);
 
-		$this->processRules($template, $data, $config);
-		
+		foreach ($this->modules as $module) $module->load($config);
+
+		$this->processRules($template, $config);
+
 		$result = ['body' => $template->output($document), 'headers' => array_merge($cachedOutput['headers'], $headers)];
-		$this->cache->write($this->template, $result);		
+		$this->cache->write($this->template, $result);
 		$result['body'] = $this->doPostProcessing($template)->output($document);
 
 		return (object) $result;
 	}
 
-	private function processRules($template, $data, $config) {
-		$valueParser = new Parser\Value($data);
-		$rules = $this->getRules($template, $valueParser);
+	private function processRules($template, $config) {
+		$rules = $this->getRules($template, $config);
 
 		foreach ($rules as $rule) {
-			if ($rule->shouldRun($this->time)) $this->executeTssRule($rule, $template, $valueParser, $config);
+			if ($rule->shouldRun($this->time)) $this->executeTssRule($rule, $template, $config);
 		}
 	}
 
@@ -78,39 +81,29 @@ class Builder {
 	}
 
 	//Process a TSS rule e.g. `ul li {content: "foo"; format: bar}
-	private function executeTssRule($rule, $template, $valueParser, $config) {
+	private function executeTssRule($rule, $template, $config) {
 		$rule->touch();
-		$pseudoMatcher = $config->createPseudoMatcher($rule->pseudo);
 
-		$hook = new Hook\PropertyHook($rule->properties, $pseudoMatcher, $valueParser);
+		$pseudoMatcher = $config->createPseudoMatcher($rule->pseudo);
+		$hook = new Hook\PropertyHook($rule->properties, $config->getLine(), $rule->file, $rule->line, $pseudoMatcher, $config->getValueParser(), $config->getFunctionSet(), $config->getFilePath());
 		$config->loadProperties($hook);
 		$template->addHook($rule->query, $hook);
 	}
 
 	//Load a template, firstly check if it's a file or a valid string
 	private function loadTemplate() {
-		if (trim($this->template)[0] !== '<') {			
+		if (trim($this->template)[0] !== '<') {
 			$xml = $this->cache->load($this->template, filemtime($this->template));
 			return $xml ? $xml : ['body' => file_get_contents($this->template), 'headers' => []];
 		}
-		else return ['body' => $this->template, 'headers' => []];	
+		else return ['body' => $this->template, 'headers' => []];
 	}
 
 	//Load the TSS rules either from a file or as a string
 	//N.b. only files can be cached
-	private function getRules($template, $valueParser) {		
-		if (is_file($this->tss)) {
-			$this->baseDir = dirname(realpath($this->tss)) . DIRECTORY_SEPARATOR;
-			//The cache for the key: the filename and template prefix
-			//Each template may have a different prefix which changes the parsed TSS,
-			//Because of this the cache needs to be generated for each template prefix.
-			$key = $this->tss . $template->getPrefix() . $this->baseDir;
-			//Try to load the cached rules, if not set in the cache (or expired) parse the supplied sheet
-			$rules = $this->cache->load($key, filemtime($this->tss));
-			if (!$rules) return $this->cache->write($key, (new Parser\Sheet(file_get_contents($this->tss), $this->baseDir, $valueParser, $template->getPrefix()))->parse());
-			else return $rules;
-		}
-		else return (new Parser\Sheet($this->tss, $this->baseDir, $valueParser, $template->getPrefix()))->parse();
+	private function getRules($template, $config) {
+		$cache = new TSSCache($this->cache, $template->getPrefix());
+		return (new Parser\Sheet($this->tss, $config->getCssToXpath(), $config->getValueParser(), $cache, $config->getFilePath()))->parse();
 	}
 
 	public function setCache(\ArrayAccess $cache) {
@@ -118,6 +111,6 @@ class Builder {
 	}
 
 	private function isValidDoc($xml) {
-		return strpos($xml, '<!') === 0 || strpos($xml, '<?') === 0;
+		return (strpos($xml, '<!') === 0 && strpos($xml, '<!--') !== 0) || strpos($xml, '<?') === 0;
 	}
 }

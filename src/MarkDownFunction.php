@@ -2,10 +2,10 @@
 
 namespace TransphpormXMarkDown;
 class MarkDownFunction implements \Transphporm\TSSFunction {
-    private $baseDir;
+    private $filePath;
 
-    public function __construct(&$baseDir) {
-        $this->baseDir = &$baseDir;
+    public function __construct(\Transphporm\FilePath $filePath) {
+        $this->filePath = $filePath;
     }
 
     public function run(array $args, \DomElement $element) {
@@ -36,11 +36,8 @@ class MarkDownFunction implements \Transphporm\TSSFunction {
 	}
 
     private function getMarkDown($markdown) {
-        if (is_file($this->baseDir . $markdown)) {
-            return file_get_contents($this->baseDir . $markdown);
-        } else if (is_file($markdown)) {
-            return file_get_contents($markdown);
-        }
+        if (is_file($this->filePath->getFilePath($markdown)))
+            return file_get_contents($this->filePath->getFilePath($markdown));
         else return $markdown;
     }
 }

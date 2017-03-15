@@ -5,127 +5,171 @@
  * @license         http://www.opensource.org/licenses/bsd-license.php  BSD License *
  * @version         1.0                                                             */
 namespace Transphporm\Parser;
-/** Parses "string" and function(args) e.g. data(foo) or iteration(bar) */ 
+/** Parses "string" and function(args) e.g. data(foo) or iteration(bar) */
 class Value {
-	private $dataFunction;
-	private $callParamsAsArray;
-	private $parent;
-	const IS_NOT_FUNCTION = 'isNotFunction';
+	private $baseData;
+	private $autoLookup;
+	/*
+		Stores the last value e.g.
+			"a" + "b"
+		Will store "a" before reading the token for the + and perfoming the concatenate operation
+	*/
+	private $last;
+	private $data;
+	private $result;
+	private $traversing = false;
+	private $allowNullResult;
 
-	public function __construct($dataFunction, Value $parent = null, $callParamsAsArray = true) {
-		$this->dataFunction = $dataFunction;
-		$this->callParamsAsArray = $callParamsAsArray;
-		$this->parent = $parent;
+	private $tokenFuncs = [
+			Tokenizer::NOT => 'processComparator',
+			Tokenizer::EQUALS => 'processComparator',
+			Tokenizer::DOT => 'processDot',
+			Tokenizer::OPEN_SQUARE_BRACKET => 'processSquareBracket',
+			Tokenizer::ARG => 'processSeparator',
+			Tokenizer::CONCAT => 'processSeparator',
+			Tokenizer::SUBTRACT => 'processSeparator',
+			Tokenizer::MULTIPLY => 'processSeparator',
+			Tokenizer::DIVIDE => 'processSeparator',
+			Tokenizer::NAME => 'processScalar',
+			Tokenizer::NUMERIC => 'processString',
+			Tokenizer::BOOL => 'processString',
+			Tokenizer::STRING => 'processString',
+			Tokenizer::OPEN_BRACKET => 'processBrackets'
+	];
+
+	public function __construct($data, $autoLookup = false, $allowNullResult = false) {
+		$this->baseData = $data;
+		$this->autoLookup = $autoLookup;
+		$this->allowNullResult = $allowNullResult;
 	}
 
-	private function extractQuotedString($marker, $str) {
-		$finalPos = $this->findMatchingPos($str, $marker);
-		$string = substr($str, 1, $finalPos-1);
-		//Now remove escape characters
-		return str_replace('\\' . $marker, $marker, $string);
+	public function parse($str) {
+		$tokenizer = new Tokenizer($str);
+		$tokens = $tokenizer->getTokens();
+		$this->result = $this->parseTokens($tokens, $this->baseData);
+		return $this->result;
 	}
 
-	private function parseFunction($function) {
-		$open = strpos($function, '(');
-		if ($open) {
-			$name = substr($function, 0, $open);
-			$bracketMatcher = new BracketMatcher($function);
-			$params = $bracketMatcher->match('(', ')');
-			
-			return ['name' => $name, 'params' => $params, 'endPoint' => $bracketMatcher->getClosePos()];
+	public function parseTokens($tokens, $data = null) {
+		$this->result = new ValueResult();
+		$this->data = new ValueData($data ? $data : $this->baseData);
+		$this->last = null;
+		$this->traversing = false;
+
+		if (count($tokens) <= 0) return [$data];
+
+		foreach (new TokenFilterIterator($tokens, [Tokenizer::WHITESPACE, Tokenizer::NEW_LINE]) as $token) {
+			$this->{$this->tokenFuncs[$token['type']]}($token);
 		}
-		else return ['name' => null, 'params' => $function, 'endPoint' => strlen($function)];
+
+		$this->processLast();
+		return $this->result->getResult();
 	}
 
-	public function parse($function, \DomElement $element = null) {
-		$stringExtractor = new StringExtractor($function);
-		$parts = explode('+', $stringExtractor);
+	private function processComparator($token) {
+		$this->processLast();
 
-		$result = [];
-		foreach ($parts as $part) {
-			$part = $stringExtractor->rebuild($part);
-			$result = array_merge($result, $this->parseString(trim($part), $element));
+		if (!(in_array($this->result->getMode(), array_keys($this->tokenFuncs, 'processComparator')) && $token['type'] == Tokenizer::EQUALS)) {
+			$this->result->setMode($token['type']);
+			$this->last = null;
+		}
+	}
+
+	//Reads the last selected value from $data regardless if it's an array or object and overrides $this->data with the new value
+	//Dot moves $data to the next object in $data foo.bar moves the $data pointer from `foo` to `bar`
+	private function processDot($token) {
+		$lastResult = $this->data->traverse($this->last, $this->result);
+
+		//When . is not preceeded by anything, treat it as part of the string instead of an operator
+		// foo.bar is treated as looking up `bar` in `foo` whereas .foo is treated as the string ".foo"
+		if ($lastResult) {
+			$this->traversing = true;
+		}
+		else if ($this->last === null)  {
+			$this->processString(['value' => '.']);
+			$this->result->setMode(Tokenizer::CONCAT);
 		}
 
-		return $result;	
+		$this->last = null;
 	}
 
-	private function parseString($function, $element) {
-		$result = [];
-		if ($function && in_array($function[0], ['\'', '"'])) {
-			$finalPos = $this->findMatchingPos($function, $function[0]);
-			$result[] = $this->extractQuotedString($function[0], $function);
+	private function hasFunction($name) {
+		return $this->baseData instanceof \Transphporm\Functionset && $this->baseData->hasFunction($name);
+	}
+
+	private function processSquareBracket($token) {
+		$parser = new Value($this->baseData, $this->autoLookup);
+		if ($this->hasFunction($this->last)) {
+			$this->callTransphpormFunctions($token);
 		}
 		else {
-			$func = $this->parseFunction($function);
-			$finalPos = $func['endPoint'];			
-			if (($data = $this->getFunctionValue($func['name'], $func['params'], $element)) !== self::IS_NOT_FUNCTION) $result = $this->appendToArray($result, $data);
-			else $result[] = trim($function);
+			$this->data->traverse($this->last, $this->result);
+			$this->last = $parser->parseTokens($token['value'], null)[0];
+			if (!is_bool($this->last)) $this->traversing = true;
 		}
-		$remaining = trim(substr($function, $finalPos+1));
-		return $this->parseNextValue($remaining, $result, $element);
 	}
 
-	private function getFunctionValue($name, $params, $element) {
-		if (($data = $this->callFunc($name, $params, $element)) !== self::IS_NOT_FUNCTION) {
-			return $data;
-		}
-		else if ($this->parent != null && ($data = $this->parent->callFunc($name, $params, $element)) !== self::IS_NOT_FUNCTION) {
-			return $data;
-		}
-		else return self::IS_NOT_FUNCTION;
+	private function processSeparator($token) {
+		$this->result->setMode($token['type']);
 	}
 
-	private function appendToArray($array, $value) {
-		if (is_array($value)) $array += $value;
-		else $array[] = $value;
-		return $array;
+	private function processScalar($token) {
+		$this->last = $token['value'];
 	}
 
-	private function callFunc($name, $params, $element) {
-		if ($name && $this->isCallable($this->dataFunction, $name)) {
-			if ($this->callParamsAsArray) return $this->dataFunction->$name($this->parse($params, $element), $element);	
-			else {
-				return $this->callFuncOnObject($this->dataFunction, $name, $this->parse($params, $element));
+	private function processString($token) {
+		$this->result->processValue($token['value']);
+	}
+
+	private function processBrackets($token) {
+		if ($this->hasFunction($this->last)
+			&& !$this->data->methodExists($this->last)) {
+			$this->callTransphpormFunctions($token);
+		}
+		else {
+			$this->processNested($token);
+		}
+	}
+
+	private function processNested($token) {
+		$parser = new Value($this->baseData, $this->autoLookup);
+		$funcResult = $this->data->parseNested($parser, $token, $this->last);
+		$this->result->processValue($funcResult);
+		$this->last = null;
+	}
+
+	private function callTransphpormFunctions($token) {
+		$this->result->processValue($this->baseData->{$this->last}($token['value']));
+		foreach ($this->result->getResult() as $i => $value) {
+			if (is_scalar($value)) {
+				$val = $this->data->read($value);
+				$this->result->write($i, $val, $this->allowNullResult);
+
 			}
 		}
-		return self::IS_NOT_FUNCTION;
+		$this->last = null;
 	}
 
-	//is_callable does not detect closures on properties, only methods defined in the class!
-	private function isCallable($obj, $func) {
-		return (isset($obj->$func) && is_callable($obj->$func)) || is_callable([$obj, $func]);
-	}
-
-	private function callFuncOnObject($obj, $func, $params) {
-		$args = [];
-		foreach ($params as $param) {
-			$stringExtractor = new StringExtractor($param);
-			$parts = explode(',', $stringExtractor);
-			foreach ($parts as $part) $args[] = $stringExtractor->rebuild($part);
-		}
-		return $this->callFuncOrClosure($obj, $func, $args);
-	}
-
-	private function callFuncOrClosure($obj, $func, $args) {
-		if (isset($obj->$func) && is_callable($obj->$func)) return call_user_func_array($obj->$func, $args);
-		else return call_user_func_array([$obj, $func], $args);
-	}
-
-	private function parseNextValue($remaining, $result, $element) {
-		if (strlen($remaining) > 0 && $remaining[0] == ',') $result = array_merge($result, $this->parse(trim(substr($remaining, 1)), $element));
-		return $result;
-	}
-	
-	private function findMatchingPos($string, $char, $start = 0, $escape = '\\') {
-		$pos = $start+1;
-
-		while ($end = strpos($string, $char, $pos)) {
-			if ($string[$end-1] === $escape) $pos = $end+1;
-			else {
-				break;
+	//Applies the current operation to whatever is in $last based on $mode
+	private function processLast() {
+		if ($this->last !== null) {
+			try {
+				$value = $this->data->extract($this->last, $this->autoLookup, $this->traversing);
+				$this->result->processValue($value);
+			}
+			catch (\UnexpectedValueException $e) {
+				$this->processLastUnexpected();
 			}
 		}
-		return $end;
+	}
+
+	private function processLastUnexpected() {
+		if (!($this->autoLookup || $this->traversing)) {
+			$this->result->processValue($this->last);
+		}
+		else {
+			$this->result->clear();
+			$this->result->write(0, false);
+		}
 	}
 }

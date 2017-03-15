@@ -8,31 +8,58 @@ namespace Transphporm\Property;
 class Repeat implements \Transphporm\Property {
 	private $functionSet;
 	private $elementData;
+	private $line;
+    private $filePath;
 
-	public function __construct(\Transphporm\FunctionSet $functionSet, \Transphporm\Hook\ElementData $elementData) {
+	public function __construct(\Transphporm\FunctionSet $functionSet, \Transphporm\Hook\ElementData $elementData, &$line, \Transphporm\FilePath $filePath) {
 		$this->functionSet = $functionSet;
-		$this->elementData = $elementData;		
+		$this->elementData = $elementData;
+		$this->line = &$line;
+        $this->filePath = $filePath;
 	}
 
 	public function run(array $values, \DomElement $element, array $rules, \Transphporm\Hook\PseudoMatcher $pseudoMatcher, array $properties = []) {
+		$values = $this->fixEmpty($values);
 		if ($element->getAttribute('transphporm') === 'added') return $element->parentNode->removeChild($element);
 		$max = $this->getMax($values);
 		$count = 0;
-		foreach ($values[0] as $key => $iteration) {
+		$repeat = $this->getRepeatValue($values, $max);
+		//Don't run repeat on the cloned element or it will loop forever
+		unset($rules['repeat']);
+		$hook = $this->createHook($rules, $pseudoMatcher, $properties);
+
+		foreach ($repeat as $key => $iteration) {
 			if ($count+1 > $max) break;
 			$clone = $this->cloneElement($element, $iteration, $key, $count++);
 			//Re-run the hook on the new element, but use the iterated data
-			//Don't run repeat on the clones element or it will loop forever
-			unset($rules['repeat']);
-			$this->createHook($rules, $pseudoMatcher, $properties)->run($clone);
+			$hook->run($clone);
 		}
 		//Remove the original element
 		$element->parentNode->removeChild($element);
 		return false;
 	}
 
+	private function getRepeatValue($values, &$max) {
+		$mode = $this->getMode($values);
+		if ($mode === 'each') $repeat = $values[0];
+		else if ($mode === 'loop') {
+			$repeat = range($values[0], $max);
+			$max++;
+		}
+		return $repeat;
+	}
+
+	private function getMode($args) {
+		return isset($args[2]) ? $args[2] : 'each';
+	}
+
+	private function fixEmpty($value) {
+		if (empty($value[0])) $value[0] = [];
+		return $value;
+	}
+
 	private function cloneElement($element, $iteration, $key, $count) {
-		$clone = $element->cloneNode(true);	
+		$clone = $element->cloneNode(true);
 		$this->tagElement($clone, $count);
 
 		$this->elementData->bind($clone, $iteration, 'iteration');
@@ -47,11 +74,11 @@ class Repeat implements \Transphporm\Property {
 	}
 
 	private function getMax($values) {
-		return isset($values[1]) ? $values[1][0] : PHP_INT_MAX;
+		return isset($values[1]) ? $values[1] : PHP_INT_MAX;
 	}
 
 	private function createHook($newRules, $pseudoMatcher, $properties) {
-		$hook = new \Transphporm\Hook\PropertyHook($newRules, $pseudoMatcher, new \Transphporm\Parser\Value($this->functionSet));
+		$hook = new \Transphporm\Hook\PropertyHook($newRules, $this->line, null, $this->line, $pseudoMatcher, new \Transphporm\Parser\Value($this->functionSet), $this->functionSet, $this->filePath);
 		foreach ($properties as $name => $property) $hook->registerProperty($name, $property);
 		return $hook;
 	}

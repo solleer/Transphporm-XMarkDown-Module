@@ -9,41 +9,46 @@ namespace Transphporm\TSSFunction;
 class Template implements \Transphporm\TSSFunction {
 	private $elementData;
 	private $baseDir;
+	private $xPath;
 
-	public function __construct(\Transphporm\Hook\ElementData $elementData, &$baseDir) {
-		$this->baseDir = &$baseDir;
-		$this->elementData = $elementData;	
+	public function __construct(\Transphporm\Hook\ElementData $elementData, \Transphporm\Parser\CssToXpath $xPath, \Transphporm\FilePath $filePath) {
+		$this->filePath = $filePath;
+		$this->elementData = $elementData;
+		$this->xPath = $xPath;
 	}
 
 	private function readArray($array, $index) {
 		return isset($array[$index]) ? $array[$index] : null;
 	}
 
-	public function run(array $args, \DomElement $element) {
+	public function run(array $args, \DomElement $element = null) {
 		$selector = $this->readArray($args, 1);
 		$tss = $this->readArray($args, 2);
-		$newTemplate = new \Transphporm\Builder($this->baseDir . $args[0], $tss ? $this->baseDir . $tss : null);
+
+		if (trim($args[0])[0] === '<') $xml = $args[0];
+		else $xml = $this->filePath->getFilePath($args[0]);
+
+		$newTemplate = new \Transphporm\Builder($xml, $tss ? $this->filePath->getFilePath($tss) : null);
 
 		$doc = $newTemplate->output($this->elementData->getData($element), true)->body;
 		if ($selector != '') return $this->templateSubsection($doc, $selector);
-			
-		return $this->getTemplateContent($doc, $tss);
+
+		return $this->getTemplateContent($doc->documentElement, $tss);
 
 	}
 
-	private function getTemplateContent($document, $tss) {
-		$newNode = $document->documentElement;
+	private function getTemplateContent($newNode, $tss) {
 		$result = [];
-		if ($newNode->tagName === 'template') {
-			foreach ($newNode->childNodes as $node) {
-				$result[] = $this->getClonedElement($node, $tss);
-			}
+		foreach ($newNode->childNodes as $node) {
+            if (isset($node->tagName) && $node->tagName === 'template') $result[] = $this->getTemplateContent($node, $tss);
+			else $result[] = $this->getClonedElement($node, $tss);
 		}
 		return $result;
 	}
 
 	private function templateSubsection($doc, $selector) {
-		$xpathStr = (new \Transphporm\Parser\CssToXpath($selector, new \Transphporm\Parser\Value($this)))->getXpath();
+		$tokenizer = new \Transphporm\Parser\Tokenizer($selector);
+		$xpathStr = $this->xPath->getXpath($tokenizer->getTokens());
 		$xpath = new \DomXpath($doc);
 		$nodes = $xpath->query($xpathStr);
 		$result = [];

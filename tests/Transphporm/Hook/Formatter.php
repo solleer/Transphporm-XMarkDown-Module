@@ -15,22 +15,41 @@ class Formatter {
 
 	public function format($value, $rules) {
 		if (!isset($rules['format'])) return $value;
-		$format = new \Transphporm\Parser\StringExtractor($rules['format']);
-		$options = explode(' ', $format);
-		$functionName = array_shift($options);
-		foreach ($options as &$f) $f = trim($format->rebuild($f), '"');
+		$tokens = $rules['format'];
 
-		return $this->processFormat($options, $functionName, $value);		
+		$functionName = $tokens->from(\Transphporm\Parser\Tokenizer::NAME, true)->read();
+
+		$options = [];
+		foreach (new \Transphporm\Parser\TokenFilterIterator($tokens->from(\Transphporm\Parser\Tokenizer::NAME),
+					[\Transphporm\Parser\Tokenizer::WHITESPACE]) as $token) {
+			$options[] = $token['value'];
+		}
+
+		try {
+			return $this->processFormat($options, $functionName, $value);
+		}
+		catch (\Exception $e) {
+			throw new \Transphporm\RunException(\Transphporm\Exception::FORMATTER, $functionName, $e);
+		}
+	}
+
+	//TODO: Abstract all error reporting externally with a method for turning it on/off
+	private function assert($condition, $error) {
+		if (!$condition) throw new \Exception($error);
 	}
 
 	private function processFormat($format, $functionName, $value) {
+		$functionExists = false;
 		foreach ($value as &$val) {
 			foreach ($this->formatters as $formatter) {
 				if (is_callable([$formatter, $functionName])) {
 					$val = call_user_func_array([$formatter, $functionName], array_merge([$val], $format));
+					$functionExists = true;
 				}
 			}
 		}
+
+		$this->assert($functionExists, "Formatter '$functionName' does not exist");
 		return $value;
 	}
 }

@@ -8,18 +8,23 @@ namespace Transphporm;
 class Config {
 	private $properties = [];
 	private $pseudo = [];
-	private $functionSet; 
+	private $functionSet;
 	private $headers;
-	private $formatter; 
-	private $baseDir;
+	private $filePath;
+	private $formatter;
+	private $line = 0;
 	private $elementData;
-	
-	public function __construct(Functionset $functionSet, Hook\ElementData $elementData, Hook\Formatter $formatter, &$headers, &$baseDir) {
+	private $xPath;
+	private $valueParser;
+
+	public function __construct(Functionset $functionSet, Parser\Value $valueParser, Hook\ElementData $elementData, Hook\Formatter $formatter, Parser\CssToXpath $xPath, FilePath $filePath, &$headers) {
 		$this->formatter = $formatter;
 		$this->headers = &$headers;
-		$this->baseDir = &$baseDir;
+		$this->filePath = $filePath;
 		$this->functionSet = $functionSet;
 		$this->elementData = $elementData;
+		$this->xPath = $xPath;
+		$this->valueParser = $valueParser;
 	}
 
 	public function getFormatter() {
@@ -30,8 +35,12 @@ class Config {
 		return $this->headers;
 	}
 
-	public function &getBaseDir() {
-		return $this->baseDir;
+	public function getFilePath() {
+		return $this->filePath;
+	}
+
+	public function &getLine() {
+		return $this->line;
 	}
 
 	public function registerFormatter($formatter) {
@@ -44,6 +53,14 @@ class Config {
 
 	public function getElementData() {
 		return $this->elementData;
+	}
+
+	public function getCssToXpath() {
+		return $this->xPath;
+	}
+
+	public function getValueParser() {
+		return $this->valueParser;
 	}
 
 	public function registerProperty($name, Property $property) {
@@ -59,8 +76,9 @@ class Config {
 	}
 
 	public function createPseudoMatcher($pseudo) {
-		$pseudoMatcher = new Hook\PseudoMatcher($pseudo);
-		foreach ($this->pseudo as $pseudoFunction) $pseudoMatcher->registerFunction($pseudoFunction);
+		$pseudoMatcher = new Hook\PseudoMatcher($pseudo, $this->valueParser);
+		foreach ($this->pseudo as $pseudoFunction) $pseudoMatcher->registerFunction(clone $pseudoFunction);
 		return $pseudoMatcher;
 	}
+
 }

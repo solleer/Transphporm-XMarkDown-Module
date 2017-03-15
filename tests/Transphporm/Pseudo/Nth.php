@@ -5,22 +5,31 @@
  * @license         http://www.opensource.org/licenses/bsd-license.php  BSD License *
  * @version         1.0                                                             */
 namespace Transphporm\Pseudo;
+use \Transphporm\Parser\Tokenizer;
 class Nth implements \Transphporm\Pseudo {
-	
-	public function match($pseudo, \DomElement $element) {
-		if (strpos($pseudo, 'nth-child') === 0) {
-			$bracketMatcher = new \Transphporm\Parser\BracketMatcher($pseudo);
-			$criteria = $bracketMatcher->match('(', ')');
-		
-			$node_path = explode('/', $element->getNodePath());
+	private $count = 0;
+	private $lastParentNode;
 
-			$bracketMatcher = new \Transphporm\Parser\BracketMatcher(array_pop($node_path));
-			$num = $bracketMatcher->match('[', ']');
-			
-			if (is_callable([$this, $criteria])) return $this->$criteria($num);
-			else return $num == $criteria;			
-		}
-		return true;
+	public function match($name, $args, \DomElement $element) {
+		if ($element->parentNode !== $this->lastParentNode) $this->count = 0;
+
+		$this->lastParentNode = $element->parentNode;
+
+
+
+		if ($name !== 'nth-child') return true;
+
+		$this->count++;
+		$criteria = $args[0];
+
+		if (is_callable([$this, $criteria])) return $this->$criteria($this->count);
+		$this->assert(is_numeric($criteria), "Argument passed to 'nth-child' must be 'odd', 'even', or of type int");
+		return $this->count == $criteria;
+	}
+
+	//TODO: Abstract assertions throughout
+	private function assert($condition, $error) {
+		if (!$condition) throw new \Exception($error);
 	}
 
 	private function odd($num) {
