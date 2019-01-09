@@ -36,8 +36,12 @@ class MarkDownFunction implements \Transphporm\TSSFunction {
 	}
 
     private function getMarkDown($markdown) {
-        if (is_file($this->filePath->getFilePath($markdown)))
+        try {
+            $filePath = $this->filePath->getFilePath($markdown);
             return file_get_contents($this->filePath->getFilePath($markdown));
-        else return $markdown;
+        }
+        catch (\Exception $e) {
+            return $markdown;
+        }
     }
 }
